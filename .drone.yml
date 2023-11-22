@@ -12,3 +12,4 @@ steps:
     image: golang:1.21.4
     commands:
       - go build
+      - ls -al
