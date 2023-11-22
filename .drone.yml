@@ -16,5 +16,6 @@ steps:
     image: minio/mc
     commands:
       - mv ScanPT scanpt-linux-amd64
+      - echo $drone_access_key
       - mc config host add minio http://192.168.0.10:8011 $drone_access_key $drone_secret_key
       - mc cp scanpt-linux-amd64 minio/transmission-diff-tool
