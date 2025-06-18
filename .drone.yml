@@ -13,6 +13,19 @@ variables:
   APP_NAME: diff-tool
   MAIN_GO_PATH: .main.go
 
+matrix:
+  include:
+    - GOOS: linux
+      GOARCH: amd64
+    - GOOS: linux
+      GOARCH: arm64
+    - GOOS: windows
+      GOARCH: amd64
+    - GOOS: darwin
+      GOARCH: amd64
+    - GOOS: darwin
+      GOARCH: arm64
+
 steps:
   - name: build-binaries
     image: golang:1.21
@@ -28,19 +41,6 @@ steps:
         fi
       - go build -v -o "dist/${BINARY_NAME}" -ldflags="-s -w" "${MAIN_GO_PATH}"
       - ls -lh dist/
-
-    matrix:
-      include:
-        - GOOS: linux
-          GOARCH: amd64
-        - GOOS: linux
-          GOARCH: arm64
-        - GOOS: windows
-          GOARCH: amd64
-        - GOOS: darwin
-          GOARCH: amd64
-        - GOOS: darwin
-          GOARCH: arm64
 
   - name: generate-checksums
     image: alpine/git
