@@ -2,10 +2,6 @@ kind: pipeline
 type: docker
 name: build-and-release
 
-trigger:
-  event:
-    - tag
-
 clone:
   depth: 1
 
