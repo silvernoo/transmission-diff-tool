@@ -2,74 +2,76 @@ kind: pipeline
 type: docker
 name: build-and-release
 
+trigger:
+  event:
+    - tag
+
+clone:
+  depth: 1
+
+variables:
+  APP_NAME: diff-tool
+  MAIN_GO_PATH: .main.go
+
 steps:
-  - name: build-artifacts
-    image: golang:1.21-alpine
+  - name: build-binaries
+    image: golang:1.21
+    environment:
+      CGO_ENABLED: 0
     commands:
+      - echo "Building for ${GOOS}/${GOARCH}..."
       - mkdir -p dist
+      - export BINARY_NAME="${APP_NAME}-${GOOS}-${GOARCH}"
       - |
-        set -e
-        APP_NAME="diff-tool"
-        MAIN_PACKAGE_PATH="./main.go"
+        if [ "${GOOS}" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+      - go build -v -o "dist/${BINARY_NAME}" -ldflags="-s -w" "${MAIN_GO_PATH}"
+      - ls -lh dist/
 
-        # 定义目标平台
-        # 格式: GOOS/GOARCH
-        targets=(
-            "linux/amd64"
-            "linux/arm64"
-            "darwin/amd64"
-            "darwin/arm64"
-            "windows/amd64"
-        )
+    matrix:
+      include:
+        - GOOS: linux
+          GOARCH: amd64
+        - GOOS: linux
+          GOARCH: arm64
+        - GOOS: windows
+          GOARCH: amd64
+        - GOOS: darwin
+          GOARCH: amd64
+        - GOOS: darwin
+          GOARCH: arm64
 
-        echo "Building version: ${APP_VERSION}"
-
-        for target in "${targets[@]}"; do
-            GOOS=$(echo $target | cut -d'/' -f1)
-            GOARCH=$(echo $target | cut -d'/' -f2)
-            
-            BINARY_NAME="${APP_NAME}-${GOOS}-${GOARCH}"
-            if [ "$GOOS" = "windows" ]; then
-                BINARY_NAME="${BINARY_NAME}.exe"
-            fi
-            
-            OUTPUT_PATH="dist/${BINARY_NAME}"
-
-            echo "Building for $GOOS/$GOARCH -> ${OUTPUT_PATH}"
-            
-            # CGO_ENABLED=0 用于生成静态链接的二进制文件（如果可能）
-            # -s -w 标志用于减小二进制文件大小
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
-                -ldflags="-s -w -X main.Version=${APP_VERSION}" \
-                -o "${OUTPUT_PATH}" \
-                ${MAIN_PACKAGE_PATH}
-
-            # 可选: 使用UPX压缩二进制文件 (需要先安装 upx)
-            # if [ "$GOOS" != "darwin" ]; then # UPX在macOS上可能有些问题
-            #   upx --best --lzma "${OUTPUT_PATH}"
-            # fi
-
-            # 打包成压缩文件
-            if [ "$GOOS" = "windows" ]; then
-                zip -j "dist/${APP_NAME}-${APP_VERSION}-${GOOS}-${GOARCH}.zip" "${OUTPUT_PATH}"
-            else
-                tar -czvf "dist/${APP_NAME}-${APP_VERSION}-${GOOS}-${GOARCH}.tar.gz" -C dist "${BINARY_NAME}"
-            fi
-            # 删除原始二进制文件，只保留压缩包
-            rm "${OUTPUT_PATH}"
-        done
-        
-        # 列出所有产物，方便调试
-        ls -R dist
+  - name: generate-checksums
+    image: alpine/git
+    commands:
+      - cd dist
+      - sha256sum * > sha256sums.txt
+      - cat sha256sums.txt
+    depends_on:
+      - build-binaries
+    when:
+      status:
+        - success
 
   - name: github-release
     image: plugins/github-release
     settings:
       api_key:
-        from_secret: ${GITHUB_TOKEN}
+        from_secret: github_token
       files:
-        - "dist/*.zip"
-        - "dist/*.tar.gz"
+        - dist/*
+      title: ${DRONE_TAG}
+      note: ./.github/release_notes.md
       checksum:
         - sha256
         - md5
+      draft: false
+      prerelease: false
+    depends_on:
+      - generate-checksums
+    when:
+      event:
+        - tag
+      status:
+        - success
