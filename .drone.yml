@@ -5,8 +5,6 @@ name: build-and-release
 steps:
   - name: build-artifacts
     image: golang:1.21-alpine
-    environment:
-      APP_VERSION: ${DRONE_TAG}
     commands:
       - mkdir -p dist
       - |
@@ -75,5 +73,3 @@ steps:
       checksum:
         - sha256
         - md5
-      title: "Release ${DRONE_TAG}"
-      note: "Release notes for ${DRONE_TAG}"
