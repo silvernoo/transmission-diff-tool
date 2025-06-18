@@ -1,73 +1,95 @@
 kind: pipeline
 type: docker
-name: build-and-release
+name: release-build
 
-clone:
-  depth: 1
+# 定义工作空间基础路径，所有步骤共享此目录
+workspace:
+  base: /drone/src
+  path: . # 相对于 base 的路径，即 /drone/src
 
-variables:
-  APP_NAME: diff-tool
-  MAIN_GO_PATH: .main.go
+# 触发条件：仅当创建 tag 时运行此 pipeline
+trigger:
+  event:
+    - tag
 
-matrix:
-  include:
-    - GOOS: linux
-      GOARCH: amd64
-    - GOOS: linux
-      GOARCH: arm64
-    - GOOS: windows
-      GOARCH: amd64
-    - GOOS: darwin
-      GOARCH: amd64
-    - GOOS: darwin
-      GOARCH: arm64
+# 环境变量，可以在步骤中全局使用
+environment:
+  # CGO_ENABLED=0 是为了更容易地跨平台编译静态链接的二进制文件
+  # 如果你的项目依赖 CGO，你需要为每个目标平台准备交叉编译工具链，这会复杂得多
+  CGO_ENABLED: 0
+  # 项目名称，用于构建二进制和压缩包
+  PROJECT_NAME: diff_tool # <--- 修改为你的项目名
+  MAIN_PACKAGE_PATH: . # <--- 修改为你的 main 包路径, 如果是根目录则为 .
 
 steps:
-  - name: build-binaries
-    image: golang:1.21
-    environment:
-      CGO_ENABLED: 0
+  - name: build-and-archive
+    image: golang:1.21-alpine # 使用较新的 Go 版本
     commands:
-      - echo "Building for ${GOOS}/${GOARCH}..."
-      - mkdir -p dist
-      - export BINARY_NAME="${APP_NAME}-${GOOS}-${GOARCH}"
+      - apk add --no-cache tar gzip zip # 安装压缩工具
+      - mkdir -p release_assets # 创建存放产物的目录
+
+      # 定义目标平台
+      # 格式: GOOS/GOARCH
       - |
-        if [ "${GOOS}" = "windows" ]; then
-          BINARY_NAME="${BINARY_NAME}.exe"
-        fi
-      - go build -v -o "dist/${BINARY_NAME}" -ldflags="-s -w" "${MAIN_GO_PATH}"
-      - ls -lh dist/
+        PLATFORMS=(
+          "linux/amd64"
+          "linux/arm64"
+          "windows/amd64"
+          "darwin/amd64"
+          "darwin/arm64"
+        )
 
-  - name: generate-checksums
-    image: alpine/git
-    commands:
-      - cd dist
-      - sha256sum * > sha256sums.txt
-      - cat sha256sums.txt
-    depends_on:
-      - build-binaries
-    when:
-      status:
-        - success
+      - |
+        echo "Starting build for tag: ${DRONE_TAG}"
+        for platform in "${PLATFORMS[@]}"; do
+          # 分割 GOOS 和 GOARCH
+          GOOS_VAL=$(echo "$platform" | cut -d'/' -f1)
+          GOARCH_VAL=$(echo "$platform" | cut -d'/' -f2)
 
-  - name: github-release
+          # 构建输出文件名
+          OUTPUT_NAME="${PROJECT_NAME}-${GOOS_VAL}-${GOARCH_VAL}"
+          if [ "$GOOS_VAL" = "windows" ]; then
+            OUTPUT_NAME="${OUTPUT_NAME}.exe"
+          fi
+
+          echo "Building for ${GOOS_VAL}/${GOARCH_VAL} -> release_assets/${OUTPUT_NAME}"
+          GOOS=${GOOS_VAL} GOARCH=${GOARCH_VAL} go build -ldflags="-s -w" -o "release_assets/${OUTPUT_NAME}" ${MAIN_PACKAGE_PATH}
+
+          if [ $? -ne 0 ]; then
+            echo "Build failed for ${GOOS_VAL}/${GOARCH_VAL}"
+            exit 1
+          fi
+
+          # 打包产物
+          cd release_assets
+          if [ "$GOOS_VAL" = "windows" ]; then
+            zip "${OUTPUT_NAME%.exe}.zip" "${OUTPUT_NAME}"
+            echo "Created ${OUTPUT_NAME%.exe}.zip"
+          else
+            tar -czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
+            echo "Created ${OUTPUT_NAME}.tar.gz"
+          fi
+          rm "${OUTPUT_NAME}" # 删除原始二进制文件，只保留压缩包
+          cd ..
+          echo "------------------------------------"
+        done
+      - ls -l release_assets # 查看最终产物
+
+  - name: publish-github-release
     image: plugins/github-release
     settings:
       api_key:
-        from_secret: github_token
-      files:
-        - dist/*
-      title: ${DRONE_TAG}
-      note: ./.github/release_notes.md
+        from_secret: github_token # 从 Drone Secrets 中获取 GitHub Token
+      files: release_assets/* # 上传 release_assets 目录下的所有文件
+      title: Release ${DRONE_TAG}
+      note: CHANGELOG.md # 可选：从文件加载 Release Notes
       checksum:
-        - sha256
-        - md5
-      draft: false
-      prerelease: false
-    depends_on:
-      - generate-checksums
+        - sha256 # 生成 sha256 校验和
+      # draft: true # 如果你想创建草稿 Release
+      # prerelease: true # 如果你想标记为预发布
     when:
       event:
         - tag
-      status:
-        - success
+
+# Drone Secrets 配置 (需要在 Drone UI 中设置)
+# - github_token: 你的 GitHub Personal Access Token，需要有 repo (或 public_repo) 权限。
