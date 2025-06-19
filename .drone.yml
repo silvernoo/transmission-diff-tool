@@ -47,7 +47,6 @@ steps:
         - macOS ARM64: diff-darwin-arm64
         
       draft: false
-      prerelease: ${DRONE_BUILD_EVENT=pull_request}
     when:
       event:
         - tag
