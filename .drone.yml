@@ -1,89 +1,62 @@
 kind: pipeline
 type: docker
-name: build-and-release-golang-app
+name: default
 
 steps:
-  - name: build-multi-platform
-    image: golang:1.21
+  - name: build
+    image: golang:1.21-alpine
+    environment:
+      CGO_ENABLED: 0
     commands:
-      - |
-        set -e
-        echo "Starting multi-platform build for tag ${DRONE_TAG}..."
+      - apk add --no-cache git
+      - go mod download
+      # Linux AMD64
+      - GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/diff-linux-amd64 .
+      # Linux ARM64
+      - GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o dist/diff-linux-arm64 .
+      # Windows AMD64
+      - GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/diff-windows-amd64.exe .
+      # macOS AMD64
+      - GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/diff-darwin-amd64 .
+      # macOS ARM64 (M1/M2)
+      - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o dist/diff-darwin-arm64 .
+      # 显示构建结果
+      - ls -la dist/
+    when:
+      event:
+        - push
+        - tag
 
-        APP_NAME="diff_tool"
-        MAIN_PACKAGE_PATH="."
-        RELEASE_DIR="/drone/src/release_artifacts"
-
-        mkdir -p "${RELEASE_DIR}"
-
-        # 目标平台列表: GOOS/GOARCH
-        targets=(
-          "linux/amd64"
-          "linux/arm64"
-          "windows/amd64"
-          "darwin/amd64"
-          "darwin/arm64"
-        )
-
-        # Go build LDFLAGS (可选, 减小体积)
-        LDFLAGS="-s -w"
-
-        for target in "${targets[@]}"; do
-          GOOS_VAL=${target%/*}
-          GOARCH_VAL=${target#*/}
-          
-          echo "Building for ${GOOS_VAL}/${GOARCH_VAL}..."
-          
-          BINARY_FILENAME="${APP_NAME}-${GOOS_VAL}-${GOARCH_VAL}"
-          ARCHIVE_FILENAME="${BINARY_FILENAME}"
-
-          if [ "${GOOS_VAL}" = "windows" ]; then
-            BINARY_FILENAME="${BINARY_FILENAME}.exe"
-            ARCHIVE_FILENAME="${ARCHIVE_FILENAME}.zip"
-          else
-            ARCHIVE_FILENAME="${ARCHIVE_FILENAME}.tar.gz"
-          fi
-          
-          # 构建
-          GOOS=${GOOS_VAL} GOARCH=${GOARCH_VAL} CGO_ENABLED=0 go build \
-            -ldflags="${LDFLAGS}" \
-            -o "${RELEASE_DIR}/${BINARY_FILENAME}" \
-            ${MAIN_PACKAGE_PATH}
-
-          # 压缩
-          echo "Archiving ${BINARY_FILENAME} to ${ARCHIVE_FILENAME}..."
-          if [ "${GOOS_VAL}" = "windows" ]; then
-            (cd "${RELEASE_DIR}" && zip "${ARCHIVE_FILENAME}" "${BINARY_FILENAME}" && rm "${BINARY_FILENAME}")
-          else
-            (cd "${RELEASE_DIR}" && tar -czf "${ARCHIVE_FILENAME}" "${BINARY_FILENAME}" && rm "${BINARY_FILENAME}")
-          fi
-          echo "Built and archived ${RELEASE_DIR}/${ARCHIVE_FILENAME}"
-        done
-
-        # 生成 checksums 文件
-        echo "Generating checksums..."
-        (cd "${RELEASE_DIR}" && sha256sum *.{zip,tar.gz} > checksums.txt)
-        
-        echo "Build artifacts prepared in ${RELEASE_DIR}:"
-        ls -l "${RELEASE_DIR}"
-        cat "${RELEASE_DIR}/checksums.txt"
-
-  - name: publish-github-release
-    image: plugins/github-release # Drone GitHub Release 插件
+  # 创建 GitHub Release（仅在 tag 时执行）
+  - name: github-release
+    image: plugins/github-release
     settings:
       api_key:
-        from_secret: github_token # 从 Drone Secrets 中获取 GitHub Token
+        from_secret: github_token
       files:
-        - /drone/src/release_artifacts/*.tar.gz
-        - /drone/src/release_artifacts/*.zip
-        - /drone/src/release_artifacts/checksums.txt
-      checksum:
-        - sha256 
+        - dist/*
+      title: Release ${DRONE_TAG}
+      note: |
+        ## Release ${DRONE_TAG}
+        
+        ### 下载链接
+        - Linux AMD64: diff-linux-amd64
+        - Linux ARM64: diff-linux-arm64  
+        - Windows AMD64: diff-windows-amd64.exe
+        - macOS AMD64: diff-darwin-amd64
+        - macOS ARM64: diff-darwin-arm64
+        
+      draft: false
+      prerelease: ${DRONE_BUILD_EVENT=pull_request}
+    when:
+      event:
+        - tag
 
-    depends_on:
-      - build-multi-platform
-
-
-
-
-      
+trigger:
+  branch:
+    - master
+    - main
+    - develop
+  event:
+    - push
+    - tag
