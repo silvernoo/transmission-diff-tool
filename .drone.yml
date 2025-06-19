@@ -47,9 +47,9 @@ steps:
         - macOS ARM64: diff-darwin-arm64
         
       draft: false
-    when:
-      event:
-        - tag
+    # when:
+    #   event:
+    #     - tag
 
 trigger:
   branch:
