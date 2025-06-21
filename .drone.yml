@@ -28,25 +28,13 @@ steps:
         - tag
 
   # 创建 GitHub Release（仅在 tag 时执行）
-  - name: github-release
+  - name: publish
     image: plugins/github-release
     settings:
       api_key:
         from_secret: github_token
       files:
         - dist/*
-      title: Release ${DRONE_TAG}
-      note: |
-        ## Release ${DRONE_TAG}
-        
-        ### 下载链接
-        - Linux AMD64: diff-linux-amd64
-        - Linux ARM64: diff-linux-arm64  
-        - Windows AMD64: diff-windows-amd64.exe
-        - macOS AMD64: diff-darwin-amd64
-        - macOS ARM64: diff-darwin-arm64
-        
-      draft: false
     when:
       event:
         - tag
